@@ -98,3 +98,49 @@ class TargetRegisterService(BaseModuleService):
     def get_registered_targets(self) -> list[dict[str, Any]]:
         """获取所有已登记的目标端点列表，供下游传输批次路由和到达对账使用。"""
         return [r for r in store.rows(self.MODULE) if r.get("status") == "已登记"]
+
+    # -- 目标端入库领用 --
+
+    def request_ingest(self, batch_code: str) -> dict[str, Any]:
+        """目标端发起入库领用请求：整批完成后才交付记录，否则返回等待结论。
+
+        领用请求只读，不重复落地，也不改写映射批次状态：
+        - 批次未完成时返回「等待本批完成」，并给出已校验但未承诺交付的条数；
+        - 批次完成后返回可入库记录（按记录键去重，原合法零值只出现一条）。
+        """
+        fc_svc = self._safe_import("app.services.field_contract", "FieldContractService")()
+        availability = fc_svc.get_ingest_availability(batch_code)
+        if not availability.get("completed"):
+            return {
+                "batch_code": batch_code,
+                "status": "等待本批完成",
+                "can_ingest": False,
+                "available": 0,
+                "validated_count": availability.get("validated_count", 0),
+                "rejected_count": availability.get("rejected_count", 0),
+                "checked_count": availability.get("checked_count", 0),
+                "rejected_by_category": availability.get("rejected_by_category", {}),
+                "pending_keys": availability.get("pending_keys", []),
+                "batch_status": availability.get("status"),
+                "records": [],
+            }
+        records = availability.get("records", [])
+        self._write_jsonl(
+            self._data_dir("events") / "ingest_claim_log.jsonl",
+            [{"action": "ingest_claim", "batch_code": batch_code,
+              "record_count": len(records),
+              "contract_version": availability.get("contract_version", ""),
+              "at": time.time()}]
+        )
+        return {
+            "batch_code": batch_code,
+            "status": "可入库",
+            "can_ingest": True,
+            "available": len(records),
+            "validated_count": availability.get("validated_count", 0),
+            "rejected_count": availability.get("rejected_count", 0),
+            "checked_count": availability.get("checked_count", 0),
+            "rejected_by_category": availability.get("rejected_by_category", {}),
+            "contract_version": availability.get("contract_version", ""),
+            "records": records,
+        }

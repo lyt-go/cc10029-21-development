@@ -1,6 +1,14 @@
-import { request } from './client'
+import { fetchJson, request } from './client'
 import { moduleMeta } from '@/data/modules'
-import type { ActionResult, EntryRow, OverviewResult, PageResult } from '@/data/types'
+import type {
+  ActionResult,
+  EntryRow,
+  FieldRejection,
+  IngestClaim,
+  MappingBatch,
+  OverviewResult,
+  PageResult,
+} from '@/data/types'
 
 export { moduleMeta }
 
@@ -57,5 +65,58 @@ export async function downloadEntries(
 export async function loadOverview(): Promise<OverviewResult> {
   const response = await request('/api/overview')
   if (!response.ok) throw new Error('运营概览读取失败')
+  return await response.json()
+}
+
+// -- 字段映射批次 --
+
+export async function listMappingBatches(): Promise<MappingBatch[]> {
+  const payload = await fetchJson<{ items: MappingBatch[] }>('/api/field-mapping/batches')
+  return payload.items
+}
+
+export async function ensureContracts(
+  specs: { source_field: string; target_field: string; data_type?: string }[],
+): Promise<EntryRow[]> {
+  const response = await request('/api/field-mapping/contracts/ensure', {
+    method: 'POST',
+    body: JSON.stringify({ contracts: specs }),
+  })
+  if (!response.ok) throw new Error('字段契约准备失败')
+  const payload = (await response.json()) as { items: EntryRow[] }
+  return payload.items
+}
+
+export async function applyMappingBatch(
+  sourceCode: string,
+  batchCode: string,
+  records: Record<string, unknown>[],
+  contractCodes?: string[],
+): Promise<Record<string, unknown>> {
+  const response = await request('/api/field-mapping/apply', {
+    method: 'POST',
+    body: JSON.stringify({
+      source_code: sourceCode,
+      batch_code: batchCode,
+      records,
+      contract_codes: contractCodes,
+    }),
+  })
+  if (!response.ok) throw new Error('字段映射批次执行失败')
+  return await response.json()
+}
+
+export async function listFieldRejections(batchCode: string): Promise<FieldRejection[]> {
+  const payload = await fetchJson<{ items: FieldRejection[] }>(
+    `/api/field-mapping/${encodeURIComponent(batchCode)}/rejections`,
+  )
+  return payload.items
+}
+
+export async function claimIngest(batchCode: string): Promise<IngestClaim> {
+  const response = await request(`/api/field-mapping/${encodeURIComponent(batchCode)}/claim`, {
+    method: 'POST',
+  })
+  if (!response.ok) throw new Error('入库领用请求失败')
   return await response.json()
 }

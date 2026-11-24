@@ -77,5 +77,38 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 字段映射校验与目标端领用
+
+字段契约在转换抽取数据时会逐条校验字段值，不合格记录按记录键写入拒收回执：
+
+| 类别 | 含义 | 处理 |
+| --- | --- | --- |
+| 缺列 | 记录里根本没有该必填字段 | 写拒收回执并暂停等待补交 |
+| 显式空 | 字段存在但值为 `null` 或空串 | 写拒收回执并暂停等待补交 |
+| 转换异常 | 有值但无法按契约类型转换 | 写拒收回执并暂停本批等待契约更正 |
+
+- 合法数值 `0` 是有效值，按 `0` 映射入库；无效值绝不降级成 `0`。
+- 回执保留原记录键、字段类别、源字段和**处理时的契约版本**；补交成功后再记录补交契约版本。
+- 已确认交付（已写入映射产物）的记录键，无论整批重跑还是只补交未完成范围，都不会再次写出。
+- 转换异常会暂停本批；用新版本契约继续未完成范围，或按回执补交缺列/显式空记录。
+- 目标端领用只在整批完成后交付可入库数据，未完成时返回「等待本批完成」及当前已通过校验的条数。
+
+接口（后端）：
+
+```text
+POST /api/field-mapping/contracts/ensure       幂等准备字段契约
+POST /api/field-mapping/contracts/{ref}/revise 更正契约并推进版本
+POST /api/field-mapping/apply                  启动字段校验/映射批次
+POST /api/field-mapping/{batch}/continue       继续未完成范围
+POST /api/field-mapping/{batch}/resubmit       按回执补交
+GET  /api/field-mapping/{batch}                批次状态与可入库条数
+GET  /api/field-mapping/{batch}/rejections     字段级拒收回执
+GET  /api/field-mapping/{batch}/resubmit-requests 补交请求（原键/类别/版本/回执）
+POST /api/field-mapping/{batch}/claim          目标端发起入库领用
+```
+
+前端在「字段契约 / 拒收回执 / 目标端登记」页面内嵌字段映射批次面板，
+并在字段契约页提供「启动四行转换批次」快捷入口。
+
 领域：数据工程
 子方向：数仓与数据湖
